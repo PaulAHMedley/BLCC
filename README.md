@@ -6,8 +6,9 @@ The estimation method works by assuming von Bertalanffy growth model describes t
 The model is fitted to a single length frequency sample with 6 parameters:  
   - S50% and Ssp for the selectivity at 50% and selectivity steepness for a logistic selectivity curve.  
   - L_inf the asymptotic mean length  
-  - Z_K the total mortality in units of K, the growth rate  
-  - Gs the growth model error parameter  
-  - phi the over-dispersion parameter for the negative binomial  
+  - Z_K the total mortality in units of K, the growth rate.  
+  - Gs the growth model error parameter.  
+  - phi the over-dispersion parameter for the negative binomial.  
+
 The model is fitted using Stan (mc-stan.org). 
  
