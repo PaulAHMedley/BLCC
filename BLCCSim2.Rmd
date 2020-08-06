@@ -1,0 +1,358 @@
+---
+title: "Stan LCCC Simulation Test"
+author: "Paul A H Medley"
+date: "2 November 2019"
+output: 
+  html_notebook: 
+    code_folding: hide
+  html_document:
+    code_folding: hide
+---
+
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rstan)
+library(here)
+library(cowplot)
+theme_set(theme_cowplot())
+
+#system2("powershell", args=c("Set-Content", "-Path", paste0(here(),"\\.Rproj.user"), "-Stream", "com.dropbox.ignored", "-Value", "1"))
+#rstan_options(auto_write = TRUE)
+#options(mc.cores = parallel::detectCores(), max.print=1000)
+#rstan_options(auto_write = FALSE)
+
+#Sys.setenv(LOCAL_CPPFLAGS = '-march=native')
+par <- list(
+  SampleSize = 1000L,
+  MinAge = 1,
+  MaxAge = 22L,
+  Linf = 52.58114149,
+  K = 0.216,
+  AgeStep = 0.01,
+  Galpha = 100,
+  Z = 0.4,
+  lR0 = 10,
+  lRs = 0.6,
+  lRm = 0.5,
+  Sels = 1.0,
+  Sel50 = 10.0
+)
+RanStart <- function(Ini, Ran_per) {
+  ini1 <- Ini
+  ini2 <- ini1
+  ini3 <- ini1
+  ini4 <- ini1
+  for (nme in names(ini2)) {
+    ini2[[nme]] <- ini2[[nme]]*(1 + Ran_per*rnorm(length(ini2[[nme]]))) 
+    ini3[[nme]] <- ini3[[nme]]*(1 + Ran_per*rnorm(length(ini3[[nme]]))) 
+    ini4[[nme]] <- ini4[[nme]]*(1 + Ran_per*rnorm(length(ini4[[nme]]))) 
+  }
+  return(list(ini1,ini2,ini3,ini4))     }
+```
+
+
+# Simulation Model
+
+
+```{r SimModel}
+falk <- function(par) {
+  LN <- as.integer(par$Linf + (par$Linf / sqrt(par$Galpha)) * 3)
+  LLB <- seq(0.0, LN - 1.0, by = 1)
+  LUB <- seq(1.0, LN, by = 1)
+  LMP <- (LLB + LUB) * 0.5
+  AgeCM <-
+    seq(par$MinAge, par$MinAge + par$MaxAge - par$AgeStep, by = par$AgeStep)
+  Sat <- par$Linf * (1.0 - exp(-par$K * AgeCM))
+  beta <- par$Galpha / Sat
+  p <- outer(LUB[-length(LUB)], beta, FUN = pgamma, shape = par$Galpha)
+  p <- rbind(p, 1 - p[length(LUB) - 1, ])
+  for (i in (length(LUB) - 1):2) {
+    p[i, ] <- p[i, ] - p[i - 1, ]
+  }
+  p <- t(p)
+  return(list(
+    AgeCM = AgeCM,
+    LLB = LLB,
+    LMP = LMP,
+    LUB = LUB,
+    p = p
+  ))
+}
+
+PopAge <- function(par, alk, Rec_t) {
+  NR <- ceiling(alk$AgeCM[length(alk$AgeCM)])
+  Rec <- exp(rnorm(NR, par$lR0, par$lRs) - (0:(NR - 1)) * par$Z)
+  Rec[NR] <- Rec[NR] / (1 - exp(-par$Z))  #Plus group
+  AgeGp <- double(length(alk$AgeCM))
+  #Rec_t is Seasonal recruitment time
+  for (i in 1:length(AgeGp)) {
+    AgeGp[i] <- 0.01 * sum(dnorm(alk$AgeCM[i], mean = (1:NR)+Rec_t, par$lRm) * Rec)
+  }
+  LenGp <- as.vector(AgeGp %*% alk$p)
+  return(list(Ages = AgeGp, Len = LenGp))
+}
+
+SampDat <- function(PopLF, SL, alk, SampleSize)  {
+  eL <- PopLF * SL
+  eL <- SampleSize * eL / sum(eL)
+  LF <- rpois(n = length(eL), lambda = eL)
+  Keep <- max(1, min(which(LF > 0)) - 5):length(alk$LMP)
+  return(list(
+    fq = LF[Keep],
+    LLB = c(alk$LLB[Keep], alk$LUB[length(alk$LUB)]),
+    LMP = alk$LMP[Keep],
+    efq = eL[Keep]
+  ))
+}
+
+SampLengths_MS <- function(par, alk = NULL, Sample_time)  {
+  if (is.null(alk))
+    alk <- falk(par)
+  SL <-
+    1 / (1 + exp(-par$Sels * alk$LMP - par$Sel50))   #Logistic selectivity
+  SN <- par$SampleSize/length(Sample_time)
+  smple <- double(length(SL))
+  for (st in Sample_time) { 
+    Pop <- PopAge(par, alk, st)
+    eL <- Pop$Len * SL
+    eL <- SN * eL / sum(eL)
+    LF <- rpois(n = length(eL), lambda = eL)
+    smple <- smple + LF
+  }
+
+  Keep <- max(1, min(which(LF > 0)) - 5):length(alk$LMP)
+  return(list(
+    fq = LF[Keep],
+    LLB = c(alk$LLB[Keep], alk$LUB[length(alk$LUB)]),
+    LMP = alk$LMP[Keep],
+    efq = eL[Keep]
+  ))
+}
+
+ranpar <- function(par) {
+  mK <- rnorm(1, par$K, 0.05)
+  mM <- 1.5*abs(rnorm(1, mK, 0.05))
+  mF <- runif(1, 0, 2*mM)
+  mLinf <- abs(20+rnorm(1, 30, 10))
+  mSel50 <- 5+abs(rnorm(1, (par$Sel50-5), 5))
+  return(list(SampleSize=par$SampleSize, MinAge=par$MinAge,
+              MaxAge = par$MaxAge, Linf = mLinf,
+              K = mK, AgeStep = par$AgeStep,
+              Galpha = 1+exp(rnorm(1, log(par$Galpha), 0.55)),
+              F_M = mF/mM,
+              Z = mM+mF,
+              K = mK,
+              lR0 = rnorm(1, par$lR0, 1),
+              lRs = runif(1, 0.1, 0.8),
+              lRm = runif(1, 0.1, 0.8),
+              Sels = rexp(1),
+              Sel50 = mSel50))
+}
+# Function to extract true values from model into dataframe
+TrueValues <- function(simn, par, LCCDat) {
+  Z_K <- par$Z/par$K
+  nlZ_K <- (log(Z_K)-LCCDat$polZ_Km)/LCCDat$polZ_Ks
+  nLinf <- (par$Linf-LCCDat$poLinfm)/LCCDat$poLinfs
+  nGalpha <- (log(par$Galpha)-LCCDat$polGam)/LCCDat$polGas
+  nSel50 <- (par$Sel50-LCCDat$poSel50m)/LCCDat$poSel50s
+  nSels <- par$Sels/LCCDat$poSelsm
+
+  return(tibble(sn=simn, nlZ_K = nlZ_K, nLinf = nLinf,
+                nGalpha = nGalpha, nSel50 = nSel50,
+                nSels = nSels, Z_K = Z_K,
+                Linf = par$Linf, Galpha = par$Galpha,
+                Sel50 = par$Sel50, Sels = par$Sels, 
+                lRs = par$lRs,
+                lRm = par$lRm,
+                F_M = par$F_M))
+}
+```
+
+
+# Random Test
+
+```{r MCMCTest_MS, results="hide", eval=FALSE}
+stmod_NB <- rstan::stan_model(file=here("BayesLCC_NB.Stan"), model_name = "BLCC_", verbose = TRUE)
+
+LCCDat <- list(
+  NK = 50,
+  #30 knots minimum
+  oBN = 0,
+  Bnd = 0,
+  fq = 0,
+  
+  poLinfm = par$Linf,
+  poLinfs = 5,
+  polGam = log(1 / 0.1 ^ 2),
+  polGas = 0.85,
+  polZ_Km = log(1.55),
+  polZ_Ks = 2.0,
+  poSel50m = par$Sel50,
+  poSel50s = 5,
+  poSelsm = par$Sels,
+  poSelss = 1,
+  polNB_phim = log(100),
+  polNB_phis = 1
+)
+
+ptargn <- 1000
+pwup <- 1000
+pthin <- 4
+pchain <- 4
+niter <- pwup + pthin * ptargn / pchain
+
+dLCCDat <- LCCDat
+if (file.exists(here("MCMCTest_MS.rda"))) {
+  load(file = here("MCMCTest_MS.rda"))
+} else {
+  df <- list()
+  df$true <- tibble()
+  df$opt <- tibble()
+  df$mcmc <- tibble()
+}
+starttime <- Sys.time()
+for (simi in 1:100) {
+  print(simi)
+  rpar <- ranpar(par)
+  alk <- falk(rpar)
+  dat <- SampLengths_MS(rpar, alk, c(0.125, 0.375, 0.625, 0.875))
+  dLCCDat$oBN <- length(dat$fq)
+  dLCCDat$Bnd <- dat$LLB
+  dLCCDat$fq <- dat$fq
+  dLCCDat$poLinfm <- rpar$Linf
+  dLCCDat$poSel50m <- rpar$Sel50
+  df$true <- rbind(df$true, TrueValues(simi, rpar, dLCCDat))
+  Ini <-
+    list(
+      nlZ_K = 0,
+      nLinf = 0,
+      nGalpha = 0,
+      nSel50 = 0,
+      nSels = 1,
+      nNB_phi = 0
+    )
+  res <-
+    optimizing(
+      stmod_NB,
+      init = Ini,
+      data = dLCCDat,
+      hessian = TRUE,
+      as_vector = FALSE,
+      verbose = FALSE,
+      iter = 20000,
+      refresh = 5000,
+      tol_obj = 1e-12,
+      tol_rel_obj = 1e3,
+      tol_grad = 1e-8,
+      tol_rel_grad = 1e5,
+      tol_param = 1e-8
+    )
+  tmp1 <- as_tibble(res$par)
+  tmp1$lp__ <- res$value
+  tmp1$sn <- simi
+  tmp1$N <- sum(dLCCDat$fq)
+  Ini <-
+    list(
+      nlZ_K = res$par$nlZ_K,
+      nLinf = res$par$nLinf,
+      nGalpha = res$par$nGalpha,
+      nSel50 = res$par$nSel50,
+      nSels = res$par$nSels,
+      nNB_phi = res$par$nNB_phi
+    )
+  sini <- list(Ini, Ini, Ini, Ini)
+  stf <- stan(
+    fit = stmod_NB,
+    file = "BayesLCC_NB.stan",
+    model_name = "LCC",
+    data = dLCCDat,
+    chains = pchain,
+    control = list(adapt_delta = 0.995, max_treedepth = 12),
+    iter = niter,
+    warmup = pwup,
+    thin = pthin,
+    init = sini,
+    verbose = FALSE
+  )
+  tmp1$diverge <- rstan::get_num_divergent(stf)
+  tmp1$maxtd <- rstan::get_num_max_treedepth(stf)
+  tmp <- rstan::extract(stf, pars = "nlZ_K", permuted = FALSE)[, , 1]
+  tmp1$Rhat <- Rhat(tmp)
+  tmp1$ess_bulk <- ess_bulk(tmp)
+  tmp1$ess_tail <- ess_tail(tmp)
+  df$opt <- rbind(df$opt, tmp1)
+  
+  tmp2 <- as_tibble(rstan::extract(stf))
+  tmp2$sn <- simi
+  df$mcmc <- rbind(df$mcmc, tmp2)
+  
+  #save(df, file = paste0("MCMCTest_MS",as.character(simi %% 2),".rda"))
+}
+print(Sys.time()-starttime)
+save(df, file = here("MCMCTest_MS.rda"))
+```
+
+```{r AllSim}
+load(file=here("MCMCTest_MS.rda"))
+df_all <- df
+load(file=here("MCMCTest_MS0.rda"))
+df$true$sn <- df$true$sn + nrow(df_all$true) 
+df$opt$sn <- df$opt$sn + nrow(df_all$true) 
+df$mcmc$sn <- df$mcmc$sn + nrow(df_all$true) 
+df_all$true <- rbind(df_all$true, df$true)
+df_all$opt <- rbind(df_all$opt, df$opt)
+df_all$mcmc <- rbind(df_all$mcmc, df$mcmc)
+
+load(file=here("MCMCTest_MS1.rda"))
+df$true$sn <- df$true$sn + c(rep(nrow(df_all$true), 100), rep(nrow(df_all$true)+100, 100))  
+df$opt$sn <- df$opt$sn + c(rep(nrow(df_all$true), 100), rep(nrow(df_all$true)+100, 100))  
+df$mcmc$sn <- df$mcmc$sn  + c(rep(nrow(df_all$true), 100000), rep(nrow(df_all$true)+100, 100000))  
+df_all$true <- rbind(df_all$true, df$true)
+df_all$opt <- rbind(df_all$opt, df$opt)
+df_all$mcmc <- rbind(df_all$mcmc, df$mcmc)
+
+load(file=here("MCMCTest_MS2.rda"))
+df$true$sn <- df$true$sn + nrow(df_all$true) 
+df$opt$sn <- df$opt$sn + nrow(df_all$true) 
+df$mcmc$sn <- df$mcmc$sn + nrow(df_all$true) 
+df_all$true <- rbind(df_all$true, df$true)
+df_all$opt <- rbind(df_all$opt, df$opt)
+df_all$mcmc <- rbind(df_all$mcmc, df$mcmc)
+rm(df)
+```
+
+
+```{r plots}
+mcmc <- df_all$mcmc %>%
+  group_by(sn) %>%
+  summarise(Z_K = mean(Z_K)) %>%
+  ungroup()
+
+mse <- df_all$opt %>%
+  select(sn, oZ_K=Z_K, diverge, maxtd, ess_bulk, ess_tail) %>%
+  left_join(df_all$true, by=c("sn"="sn")) %>%
+  select(sn, oZ_K, tZ_K=Z_K, diverge, maxtd, ess_bulk, ess_tail) %>%
+  inner_join(mcmc, by="sn") %>%
+  select(sn, oZ_K, tZ_K, Z_K, diverge, maxtd, ess_bulk, ess_tail) %>%
+  mutate(eZ_K=Z_K-tZ_K)
+
+ggplot(mse, aes(x=eZ_K)) +
+  geom_density(fill="lightblue")
+ggplot(filter(mse, diverge>0), aes(x=eZ_K)) +
+  geom_density(fill="lightblue")
+ggplot(filter(mse, maxtd>0), aes(x=eZ_K)) +
+  geom_density(fill="lightblue")
+ggplot(filter(mse, ess_bulk<100), aes(x=eZ_K)) +
+  geom_density(fill="lightblue")
+ggplot(filter(mse, ess_tail<100), aes(x=eZ_K)) +
+  geom_density(fill="lightblue")
+
+ggplot(mse, aes(x=Z_K, y=eZ_K)) +
+  geom_point()
+ggplot(mse, aes(x=Z_K, y=tZ_K)) +
+  geom_point() +
+  geom_abline(intercept=0, slope=1)
+```
+

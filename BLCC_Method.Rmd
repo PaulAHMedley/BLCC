@@ -1,0 +1,225 @@
+---
+title: "Bayes Length Catch Curve"
+author: "Paul A H Medley"
+date: "2 July 2019"
+output: html_notebook
+  keep_md: true
+---
+
+```{r setup, include=FALSE}
+library(statmod)
+library(tidyverse)
+library(here)
+```
+
+# Introduction
+
+
+# Method  
+
+The probability that a randomly sampled fish is a particular length depends upon its age, and other assorted parameters for growth, selectivity and so on. The problem is that for most length frequencies, the ages of any of the fish will be unknown. Age can be effectively removed by integrating over age to obtain the probability a randomly sampled fish will be in length bin $i$:
+
+$$
+p_i = \int_{L_i}^{L_{i+1}} \int_0^\infty \  P(L | a, \theta) {\ \ \ \ } P(a | \theta) \ da \ dL
+$$
+
+
+
+Size at age variation may be modelled using the gamma distribution. This function has  increasing size variance with mean size (constant CV) and probability mass only on the positive range.  
+
+The gamma distribution is given as:
+
+$$
+ f(L | \alpha, \beta) = {{\beta^\alpha L^{\alpha-1} {\large e}^{-\beta L}} \over \Gamma(\alpha)}
+$$
+
+The mean for the gamma distribution is $\alpha / \beta$, so we can incorporate growth by defining $\beta$ based on mean length defined by age :
+
+$$
+  \beta = {\alpha \over L_{\infty}(1-e^{-K(a-a_0)})}
+$$
+
+In common with a catch curve, the proportion of fish at every age follows an exponential distribution:  
+
+$$
+  f(a | Z) = {\large e}^{-Za}
+$$
+
+Substituting $\beta$ and the exponential into the above gamma density function gives the integral across possible ages for the marginal length probability density:
+
+$$
+\int_{0}^{\infty}  f(L | a, \theta) \ f(a | \theta) \ da \  \propto   
+\int_{0}^{\infty} 
+{1 \over \Gamma(\alpha)} 
+{\left (  {\alpha \over L_{\infty}(1-e^{-K(a-a_0)})} \right )^\alpha \ L^{\alpha-1} \ 
+{\large e}^{-{\alpha L \over L_{\infty}(1-e^{-K(a-a_0)})}}} 
+{\large e}^{-Za}
+  \ da
+$$
+(Note that selectivity, introduced with length integral below, is not included in the mortality model.)  
+
+There is no closed solution for the integral, so it needs to calculated numerically. For this function, the appropriate Gauss quadrature polynomial is the generalized Laguerre-Gauss, which approximates functions containing $e^{-x} x^{-\alpha}; \ \ 0 \leq  x < \infty$ . Through appropriate substitution is to define a variable $x$ such that the integral is a dimensionless values of length as a proportion of $L_\infty$ and $Z/K$.   
+
+$$
+\begin{align}
+c & = \alpha L / L_\infty \\
+m & = Z/K \\
+b_0 & = {\large e}^{K a_0} \\
+c+x & = {c \over 1 - {\large e}^{-Ka}} \\
+da & = {c \over x(c+x)K} dx \\
+
+\int_{0}^{\infty}  f(a, L | \theta) \ da \  & \propto  
+{ \alpha \ b_0^{-Z/K} \ {\large e}^{-c} \over L_\infty \ K \ \Gamma(\alpha)}
+
+\ \int_{0}^{\infty} 
+\ {(c+x)^{\alpha-m-1} \  
+\ x^{m-1}
+\ {\large e}^{-x }} 
+\ dx
+\end{align}
+$$
+
+Generally the largest errors occur at higher $Z/K$ values. This must be born in mind when setting the prior for $Z/K$ and in the analysis of very slow growing species. In addition, errors were only significant for sizes less than 30% of $L_\infty$. Generally for these, further improvements in accuracy may be necessary, for example including more nodes at smaller sizes. 
+The Gaussian quadrature nodes and weights will need to be re-estimated for each change in $Z/K$. This will mean recalculating the nodes and weights for each parameter draw once, then these can be used for all lengths to be evaluated.  
+
+Stan is introducing a function for 1D integration in version 2.2 (next version). This would be an adaptive integration method. This may prove to be more suitable, but a bespoke integration may provide a faster calculation, since an adaptive method may require a large number of calculations close to function boundaries and it may be difficult to take advantage of using the same node weights over the whole length composition. 
+
+# Length Bin Integration
+
+For integration over lengths in each length bin, "Simpson's Rule" should provide adequate accuracy. This only requires evaluation of the density of fish at each length on either end and in the centre of each bin, so if there are N bins, 2N+1 evaluations are required. Again, because this only requires function evaluations at fixed intervals, the resulting function should be smooth and quick to calculate, making it suitable for Stan MCMC.  
+
+## Simpson's Rule
+
+The rule tabulates the function across a bin from the lower to upper bound. 
+
+$$
+S_i(f) = \frac{\Delta L}{3} \sum_{j=1}^{N/2} \left( f(L_{i+2j-2}\ |\ \theta)
++ 4 f(L_{i+2j-1}\ |\ \theta) 
++ f(L_{i+2j}\ |\ \theta) \right)
+$$
+where N is even number of divisions between end points $a$ and $b$, $\Delta x = (b-a)/N $. Splitting each bin into 2 divisions (N=2), so each 1cm bin would have upper and lower bounds and a mid-point L to calculate, while $\Delta L = 0.5cm$. The expected density of fish is then estimated at each interval and mid-interval for each bin and the calculation applied to obtain the expected proportion of fish in each bin. The final values will need to be normalised by dividing by the sum of the values across all bins, including bins at either end which might be extended to ensure non-negligible probabilities are included.   
+
+$$
+S_i(f) = \frac {1} {6}  \left( f(L_i \ |\ \theta)
++ 4 f(L_{i+0.5}\ |\ \theta) 
++ f(L_{i+1}\ |\ \theta) \right)
+$$
+
+This provides sufficient precision. 
+
+It is important that zero counts are included in the frequencies, so the range of counts should include zero buffers based on the observed counts. Given that the growth parameters will need informative priors, it makes sense to set zero observations at either end of the range based on these, so they would be defined in the length frequencies in each case based on $L_\infty$.
+
+In this form, the integral calculated for each length bin needs to be normalised to obtain the expected proportion of the sample. Therefore the constants which are fixed over length and age could be neglected.   
+
+$$
+S_i = { \alpha \ b_0^{-Z/K} \over L_\infty \ K \ \Gamma(\alpha)}
+\int_{L_i}^{L_{i+1}} 
+{{\large e}^{-(\alpha L / L_\infty)} \over 1 + {\large e}^{-S_s (L - S_{50}) }}
+\ \int_{0}^{\infty} \ {((\alpha L / L_\infty)+x)^{(\alpha-Z/K-1)} \  
+\ x^{(Z/K-1)} \ {\large e}^{-x }} \  dx
+$$
+
+So the expected proportion in each bin is given by.  
+
+$$
+p_i = {S_i \over \sum_{i=1}^{n} S_i }
+$$
+
+Constant terms are only retained for scaling purposes, but parameters $K$ and $b_0$ are removed. The final form of the model is:
+
+$$
+p_i \propto { \alpha \over L_\infty \ \Gamma(\alpha)}
+\int_{L_i}^{L_{i+1}} 
+{{\large e}^{-(\alpha L / L_\infty)} \over 1 + {\large e}^{-S_s (L - S_{50}) }}
+\ \int_{0}^{\infty} \ {((\alpha L / L_\infty)+x)^{(\alpha-Z/K-1)} \  
+\ x^{(Z/K-1)} \ {\large e}^{-x }} \  dx \ dL
+$$
+
+Calculations are carried out on a log-scale where possible also to avoid overflow/undeflow.  
+
+
+# Count Likelihood
+
+The observations are counts within each length bin. An appropriate likelihood is the poisson distribution, but overdispersion might be expected. The negative binomial can account for overdispersion and was found, in simulations, to provide more robust results in dealing with lognormal recruitment process errors, for example.
+
+# Length Bin Integration
+
+For integration over lengths in each length bin, "Simpson's Rule" should provide adequate accuracy. This only requires evaluation of the density of fish at each length on either end and in the centre of each bin, so if there are N bins, 2N+1 evaluations are required. Again, because this only requires function evaluations at fixed intervals, the resulting function should be smooth and quick to calculate, making it suitable for Stan MCMC.  
+
+## Simpson's Rule
+
+The rule tabulates the function across the bin from the lower (0) to upper (2) bound. 
+
+$$S_N(f) = \frac{\Delta x}{3} \sum_{i=1}^{N/2} \left( f(x_{2i-2}) + 4 f(x_{2i-1}) + f(x_{2i}) \right)$$
+
+where N is even number of divisions between end points $a$ and $b$, $\Delta x = (b-a)/N $. Splitting each bin into 2 divisions, each 1cm bins would be 0.5cm. The expected density of fish is then estimated at each interval and mid-interval for each bin and the calculation applied to obtain the expected proportion of fish in each bin. The final values will need to be normalised by dividing by the sum of the values across all bins, including bins at either end which might be extended to ensure non-negligible probabilities are included.   
+
+This last issue, ensuring that zeroes are represented so that the normalisation does not eliminate significant likelihoods for zero observations. Given that the growth parameters will need highly informative priors, it makes sense to set zero observations at either end of the range based on these, so they would be defined in the length frequencies in each case based on $L_\infty$.
+
+In this form, the integral calculated for each length bin needs to be normalised to obtain the expected proportion of the sample. Therefore the constants which are fixed over length and age could be neglected.   
+
+$$
+S_i = { \alpha \over L_\infty \ K \ \Gamma(\alpha)}
+\int_{L_i}^{L_{i+1}} 
+{{\large e}^{-(\alpha L / L_\infty)} \over 1 + {\large e}^{-S_s (L - S_{50}) }}
+\ \int_{0}^{\infty} \ {((\alpha L / L_\infty)+x)^{(\alpha-Z/K-1)} \  
+\ x^{(Z/K-1)} \ {\large e}^{-x }} \  dx
+$$
+
+
+$$
+p_i = {S_i \over \sum_{i=1}^{n} S_i }
+$$
+
+However, they are useful in providing the scale and therefore avoiding overflow/underflow, so are retained in the calculations, except the parameter $K$ and $b_0$ are removed. The final form of the model is:
+
+$$
+p_i \propto { \alpha \over L_\infty \ \Gamma(\alpha)}
+\int_{L_i}^{L_{i+1}} 
+{{\large e}^{-(\alpha L / L_\infty)} \over 1 + {\large e}^{-S_s (L - S_{50}) }}
+\ \int_{0}^{\infty} \ {((\alpha L / L_\infty)+x)^{(\alpha-Z/K-1)} \  
+\ x^{(Z/K-1)} \ {\large e}^{-x }} \  dx \ dL
+$$
+
+Calculations are carried out on a log-scale where possible also to avoid overflow/undeflow.  
+
+# Likelihood
+
+The observations are counts within each length bin. An appropriate likelihood is the poisson distribution.
+
+$$
+P(x) = {\large e^{-\mu} \mu^x \over x!}
+$$
+
+# Overdispersion
+
+There are two options for dealing with overdispersion in the observations. Overdispersion in observation error can be accounted for either using an alternative likelihood to account for overdispersion in observation error or to model process errors directly. Observation error might well be higher than expected in the poisson because samples are not independent. Fishing by its very nature will tend to catch fish in groups which may share similar sizes. Process error may occur where the abundance of different ages is not due to a constant mortality. This is mostly likely the result of recruitment variation and, as demonstrated in the simulations above, this may have a profound effect on the estimates. It will not be possible to estimate the processes (e.g. recruitment variation) without a time series of data. Instead the process error might be accounted for as a random effect, which might improve the estimates of model uncertainty rather than dismiss errors that can be neglected.
+
+$$
+P(x) = {\beta^\alpha \over \Gamma(\alpha) }
+
+x^{\alpha-1} \large e^{-\beta x}
+
+$$
+
+
+$$
+P(x) = \int_0^\infty {\beta^\alpha \over \Gamma(\alpha) }
+
+\mu^{\alpha-1} \large e^{-\beta \mu} \ \ 
+
+\small { \large e^{-\mu} \ \small \mu^x \over \small x!} d\mu \ = \ 
+
+\int_0^\infty {\beta^\alpha \over \Gamma(\alpha) \ x! }
+
+\mu^{\alpha+x-1} \ \large e^{-\beta \mu -\mu} \ \ 
+
+ d\mu \ = \ { \Gamma(\alpha+x) \ \beta^\alpha \over \Gamma(\alpha) \ \Gamma(x) \ (\beta+1)^{\alpha+x}}
+
+$$
+
+This is a negative binomial distribution. Stan provides a negative binomial probability mass function with an additional term to represent over-dispersion relative to the binomial distribution. This was used to fit the model to see whether the performance improved using this likelihood.   
+
+
+
+

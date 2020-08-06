@@ -1,0 +1,107 @@
+---
+title: "Sim Length Frequency Data"
+author: "Paul Medley"
+date: "3 August 2017"
+output: html_notebook
+---
+
+The following code simulates and plots length frequency data compositions based on a very simple population model. It demonstrates the wide variation in patterns we might see in length compositions based only on mortality rates and age at first selectivity. The population is set up with annual recruitment, and age is converted to length using an age length key which includes growth variation.  
+
+```{r Setup}
+library(tidyverse)
+library(cowplot)
+library(rstan)
+pK <- 0.3
+pt0 <- -0.2
+pLinf <- 55
+pGsig <- 0.07   #Error sd for lognormal growth
+Len <- 5:70
+lLUB <- log(Len+1) #Upper bound on each length bin
+LN <- length(lLUB)
+Age <- 1:20
+AgeCM <- Age+0.5
+alk <- array(0,c(20,LN))
+LLF <- log(pLinf*(1.0-exp(-pK*(AgeCM-pt0))))
+#Construct an age-length key
+for (ai in Age) {
+  alk[ai,] = pnorm(lLUB,LLF[ai],pGsig)  
+  alk[ai,-1] <- alk[ai,-1]-alk[ai,-LN] #Row should up to 1.0 as long as full range of sizes is covered
+}
+```
+
+
+
+```{r Sim1}
+Sel <- 1.0/(1+exp(-1.5*(Age-6)))
+SimA <- rpois(n=20,
+          lambda=c(10000*exp(-0.3*Age)*Sel))
+SimL <- as.vector(round(SimA %*% alk))
+#write_csv(data.frame(Len=Len,AbIn=SimL),"LCCCSim1.csv")
+barplot(height=SimL,
+        ylab="Sample Frequency",xlab="Length (cm)",
+        names.arg=as.character(Len))
+text(11,450,"Selectivity",adj=c(0,0),cex=0.8)
+text(11,50,"M=0.3",adj=c(0,0),cex=0.8)
+par(fig = c(grconvertX(c(5, 28), from="user", to="ndc"),
+            grconvertY(c(150, 450), from="user", to="ndc")),
+    mar = c(1,1,1,1),
+    new = TRUE)
+
+plot(y=Sel, x=Age, cex.lab=1, axes=F, ty="l")
+axis(1, labels=NA,at=c(1,max(Age)))
+axis(2, labels=NA,at=c(1,max(SimL)))
+#text(3.5,10,"Beta",adj=c(0,0),cex=3)
+```
+
+
+
+
+
+
+
+```{r Sim2}
+Age <- 1:20
+Sel <- 1.0/(1+exp(-2.0*(Age-10)))
+SimA <- rpois(n=20,
+          lambda=c(1.8e11*exp(-1.8*Age)*Sel))
+SimL <- as.vector(round(SimA %*% alk))
+#write_csv(data.frame(Len=Len,AbIn=SimL),"LCCCSim2.csv")
+barplot(height=SimL,
+        ylab="Sample Frequency",xlab="Length (cm)",
+        names.arg=as.character(Len))
+text(11,800,"Selectivity",adj=c(0,0),cex=0.8)
+text(11,250,"M=1.8",adj=c(0,0),cex=0.8)
+par(fig = c(grconvertX(c(5, 28), from="user", to="ndc"),
+            grconvertY(c(400, 800), from="user", to="ndc")),
+    mar = c(1,1,1,1),
+    new = TRUE)
+
+plot(y=Sel, x=Age, xlim=c(0,max(Age)), cex.lab=1, axes=F, ty="l")
+axis(1, labels=NA,at=c(1,max(Age)))
+axis(2, labels=NA,at=c(1,max(SimL)))
+
+```
+
+
+
+```{r Sim3}
+Age <- 1:20
+Sel <- 1.0/(1+exp(-2.0*(Age-1)))
+SimA <- rpois(n=20,
+          lambda=c(1.1e5*exp(-0.8*Age)/(1+exp(-2.0*(Age-1)))))
+SimL <- as.vector(round(SimA %*% alk))
+#write_csv(data.frame(Len=Len,AbIn=SimL),"LCCCSim3.csv")
+barplot(height=SimL,
+        ylab="Sample Frequency",xlab="Length (cm)",
+        names.arg=as.character(Len))
+text(52,5000,"Selectivity",adj=c(0,0),cex=0.8)
+text(50,2000,"M=0.8",adj=c(0,0),cex=0.8)
+par(fig = c(grconvertX(c(50, 70), from="user", to="ndc"),
+            grconvertY(c(2500, 5000), from="user", to="ndc")),
+    mar = c(1,1,1,1),
+    new = TRUE)
+
+plot(y=Sel, x=Age, xlim=c(0,max(Age)+1), cex.lab=1, axes=F, ty="l")
+axis(1, labels=NA,at=c(1,max(Age)))
+axis(2, labels=NA,at=c(1,max(SimL)))
+```

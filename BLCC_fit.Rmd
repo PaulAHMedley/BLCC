@@ -1,0 +1,250 @@
+---
+title: "Stan Stock Assessment"
+author: "Paul A H Medley"
+date: "2 April 2019"
+output: html_notebook
+---
+
+# Introduction
+
+## Background
+
+This notebook documents of application of a Bayes length converted catch curve.  
+
+The reason for writing the model into Stan is primarily my familiarity with Stan, which forms an excellent platform for carrying out MCMC, including properly evaluating the MCMC simulation convergence. Stan does not use a Gibbs sampler and I have found that it works on a wide range of time series models. In this particular case, however, I suspect there is little advantage and a Gibbs sampler such as JAGS should work equally well.
+
+The model itself is a simple catch curve converted from age to length for a single sample of length frequencies. Perhaps the most important assumption is that selectivity is logistic.  
+
+## Software
+
+The model is implemented in Stan (https://mc-stan.org/). The Stan functions are loaded from rstan, which also requires a link to the C++ compiler.  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cowplot)
+library(rstan)
+library(statmod)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores(), max.print=1000)
+#Sys.setenv(LOCAL_CPPFLAGS = '-march=native')  
+
+# Some useful functions
+
+getp <- function(si,ps) {
+  #Extracts parameters from fit ps for simulation si
+  p <- list()
+  for (nme in names(ps)) {
+    dm <- dim(ps[[nme]])
+    ld <- length(dm)
+    if(ld==1) {
+      p[[nme]] <- ps[[nme]][si]
+    } else if(ld==2) {  
+      p[[nme]] <- ps[[nme]][si,]
+    } else if(ld==3) {  
+      p[[nme]] <- ps[[nme]][si,,]
+    } else {
+      p[[nme]] <- ps[[nme]][si,,,]
+    }
+  }
+  return(p) 
+}
+
+getminp <- function(ps) {
+  return(getp(which.max(ps$lp__), ps))
+}
+
+
+
+LCCDat <- function(lfd, Linf, Sel50) {
+  return(
+  )
+}
+
+
+LCCIni <- function() {
+  return(list(
+    nLinf   = 0,
+    nlZ_K   = 0,
+    nGalpha = 0,
+    nSel50  = 0,
+    nSels   = 1
+  ))
+}
+
+
+LCC_MCMC_Ini <- function(pchain, par=NULL) {
+  if (is.null(par)) {
+    return(rep(list(LCCIni()), pchain))
+  } else {
+    return(rep(list(par), pchain))
+  }
+} # LCC_MCMC_Ini
+
+
+
+fit_blcc <- function(illb, ilfd, bwd=1, Linf=NULL, sel50=NULL){
+  # Fits the length catch curve to a length frequency data set with default parameter settings
+  # vector illb are lower bound of each bins
+  # vector ilfd are the frequencies
+  # real bwd is the bin width
+  # Linf is the best guess for maximum mean length
+  # Sel50 is the 50% selectivity for a logistic curve
+  
+  #check input vectors, same length, illb must be in sequence
+  if (!(is.vector(illb) & is.vector(ilfd)) | (length(illb)!=length(ilfd))) {
+    print("Error: please supply two vectors of same length 1: lower bound of bins 2: frequency in each bin")
+    return()
+  }
+  if (any(diff(illb) <= 0)) {
+    print("Error: lower bound of bins must be unique and in ascending order")
+    return()
+  }
+  if (bwd<=0) {
+    print("Error: bin width must be greater than zero")
+    return()
+  }
+  
+  ollb <- illb/bwd
+  #Complete data with zeroes if necessary
+  minb <- max(0, min(ollb)-3)
+  llb <- seq(minb, max(ollb)+4, by=1)
+  ii <- match(ollb, llb)
+  if (any(is.na(ii))) {
+    print("Error: lower bound of vector must be integers")
+    return()
+  }
+  lfd <- double(length(llb)-1)
+  lfd[ii] <- ilfd
+  
+  if (is.null(Linf)) {
+    #It would normally be expected that Linf is provided from other sources. 
+    #Here, the default is 90% of the maximum observed size. Need to think whether this is a good idea or insist a value is given
+    Linf <- 0.9*max(ollb)
+  } else {
+    Linf <- Linf/bwd
+    if (Linf < min(illb)) {
+      print("Error: Linf incorrectly defined - too small")
+      return()
+    }
+  }
+  
+  if (is.null(sel50)) {
+    #by default set as half way between the minimum and the mode
+    sel50 <- 0.5*(minb, llb[which.max(lfd)])
+  }
+
+  Ini <- list(
+    nLinf   = 0,
+    nlZ_K   = 0,
+    nGalpha = 0,
+    nSel50  = 0,
+    nSels   = 1
+  )
+  
+  ld <- list(
+      NK = 50,
+      #30 knots minimum
+      oBN = length(lfd),
+      Bnd = llb,
+      fq  = lfd,
+      poLinfm = Linf,
+      poLinfs = 5.0,
+      polGam = log(1 / 0.1 ^ 2),
+      polGas = 0.85,
+      polZ_Km = log(1.55),
+      polZ_Ks = 2.0,
+      poSel50m = Sel50,
+      poSel50s = 5.0,
+      poSelsm = 1.0,
+      polNB_phim = log(100),
+      polNB_phis = 1.0
+    )
+
+  stan_fn <- here("LCC", "BayesLCC.stan")
+  stmod_NB <- stan_model(stan_fn, model_name = "LCC")
+  
+  res <-
+    optimizing(
+      stmod_NB,
+      data = ld,
+      init = Ini,
+      hessian = TRUE,
+      as_vector = FALSE,
+      verbose = FALSE,
+      iter = 20000,
+      refresh = 500,
+      tol_obj = 1e-12,
+      tol_rel_obj = 1e3,
+      tol_grad = 1e-8,
+      tol_rel_grad = 1e5,
+      tol_param = 1e-8
+    )
+  ptargn <- 4000
+  pwup <- 1000
+  pthin <- 1
+  pchain <- 4
+  niter <- pwup + pthin * ptargn / pchain
+  stf <- stan(
+    fit = stmod_NB,
+    file = stan_fn,
+    model_name = "LCC",
+    data = ld,
+    chains = pchain,
+    control = list(adapt_delta = 0.995, max_treedepth = 12),
+    iter = niter,
+    warmup = pwup,
+    thin = pthin,
+    init = LCC_MCMC_Ini(pchain, res$par),
+    verbose = FALSE
+  )
+  return(stf)
+}
+
+
+fit_blcc(c(2, 5, 6, 8, 9), c(2, 5, 6, 3, 2))
+
+
+
+```
+
+
+```{r CompileModel,echo=FALSE}
+stmod <- stan_model("BayesLCC_NB.stan", model_name = "BLCC")
+#expose_stan_functions(stmod)
+```
+
+```{r TestFunctions}
+tmp1 <- Gauss_Laguerre_Quad(5, 4.2)
+tmp2 <- gauss.quad(5, kind="laguerre", alpha=4.2) #, alpha=1.0)
+sum((tmp1[[1]]-tmp2[[1]])^2+(tmp1[[2]]-tmp2[[2]])^2)
+
+
+alpha = 2
+L = 26
+Linf=25
+K=0.1
+Z=0.4
+
+gam1 <- function(x, alpha, L, Linf, K, Z) {
+  c <- alpha*L/Linf
+  m <- Z/K
+  const <-  c * exp(-c) / (L*K*gamma(alpha))
+  return(const*((c+x)^(alpha-m-1)) * (x^(m-1)) * exp(-x))
+}
+
+gam2 <- function(x, alpha, L, Linf, K, Z) {
+  c <- alpha*L/Linf
+  m <- Z/K
+  const <-  c * exp(-c) / (L*K*gamma(alpha))
+  return(const*((c+x)^(alpha-m-1))) #(x^(m-1)) * exp(-x) has been removed as this is in the LG polynomial
+}
+
+dg1 <- Gauss_Laguerre_Quad(30, Z/K-1)
+int <- sum(gam2(dg1[[1]], alpha, L, Linf, K, Z)*dg1[[2]])
+
+int - integrate(gam1, 0, Inf, alpha, L, Linf, K, Z)$value
+
+```
+
+
