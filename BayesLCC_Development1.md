@@ -10,10 +10,7 @@ output:
     keep_md: true
 ---
 
-```{r setup, include=FALSE}
-library(statmod)
-library(tidyverse)
-```
+
 
 # Introduction
 
@@ -88,7 +85,8 @@ $$
 
 In this form, it should be possible to obtain estimates of the integral using Gaussian quadrature. This can be tested using the R function "integrate()" which uses an adaptive method that should be accurate.  
 
-```{r CheckIntegration}
+
+```r
 gr <- function(a, pL, K, sg, Z) {
   #Calculates the log-normal probability for L/Linf
   mL <- log((1-exp(-K*a)))
@@ -120,20 +118,43 @@ for (i in 1:n) {
   le[i] <- integrate(gr, 0, Inf, i/Linf, K, sg, Z)$value
 }
 plot(y=le, x=1:n, type="l")
+```
 
+![](BayesLCC_Development1_files/figure-html/CheckIntegration-1.png)<!-- -->
+
+```r
 x <- 1
 a <- -log(1-(L/Linf)*exp(-sqrt(2)*x*sg))/K
 
 "Should be the same:"
+```
+
+```
+## [1] "Should be the same:"
+```
+
+```r
 integrate(gr, 0, Inf, L/Linf, K, sg, Z)
+```
+
+```
+## 4.413506 with absolute error < 0.00037
+```
+
+```r
 integrate(grint, -Inf, Inf, L/Linf, K, sg, Z)
+```
+
+```
+## 4.413506 with absolute error < 1.2e-05
 ```
 
 Note that simulated size frequency is already dome-shaped without a selectivity function because of the growth meaning fish spend less time in smaller size categories.  
 
 A random draw of parameters allows a test of the integration procedures. In this case, we use the R "integrate()" function and a Gauss-Hermite integral. The latter uses a function with the $exp(-x^2)$ removed as this is approximated by the quadrature polynomial. This is done because the numerical behaviour of the function may make the Gaussian quadrature inaccurate over some ranges of parameters.  
 
-```{r GaussQuad1}
+
+```r
 grintGQ <- function(x, pL, K, sg, Z) {
   #Function for lognormal pdf grint with exp(-x^2) removed for Gauss quadrature
   sx <- sqrt(2)*x*sg
@@ -166,25 +187,87 @@ for (i in 1:2000) {
 }
 
 summary(df)
+```
+
+```
+##        L               Linf              pL                K          
+##  Min.   : 1.025   Min.   : 5.055   Min.   :0.01604   Min.   :0.05131  
+##  1st Qu.: 9.409   1st Qu.:29.648   1st Qu.:0.27570   1st Qu.:0.32532  
+##  Median :21.393   Median :51.729   Median :0.53296   Median :0.57142  
+##  Mean   :27.171   Mean   :52.352   Mean   :0.53369   Mean   :0.56294  
+##  3rd Qu.:40.460   3rd Qu.:76.166   3rd Qu.:0.78647   3rd Qu.:0.80938  
+##  Max.   :98.060   Max.   :99.866   Max.   :1.14401   Max.   :1.04980  
+##        sg                Z              int_a              int_b         
+##  Min.   :0.01022   Min.   :0.0502   Min.   :  0.0000   Min.   :  0.0000  
+##  1st Qu.:0.09206   1st Qu.:0.2879   1st Qu.:  0.8105   1st Qu.:  0.8095  
+##  Median :0.16029   Median :0.5493   Median :  1.5537   Median :  1.5468  
+##  Mean   :0.16124   Mean   :0.5447   Mean   :  3.4675   Mean   :  2.9468  
+##  3rd Qu.:0.23188   3rd Qu.:0.7901   3rd Qu.:  2.9612   3rd Qu.:  2.9032  
+##  Max.   :0.31000   Max.   :1.0491   Max.   :193.7660   Max.   :198.3108  
+##      int_d          
+##  Min.   :-63.74442  
+##  1st Qu.:  0.00000  
+##  Median :  0.00000  
+##  Mean   :  0.52076  
+##  3rd Qu.:  0.00007  
+##  Max.   : 86.30420
+```
+
+```r
 sum(df$int_d^2)
+```
+
+```
+## [1] 41357.65
 ```
 
 int_a and int_b should be equal, so int_d should be zero. They are generally close, but there are clearly significant differences in some cases.  
 
-```{r Plots1}
+
+```r
 plot(x=df$int_a, y=df$int_b)
 ```
 
+![](BayesLCC_Development1_files/figure-html/Plots1-1.png)<!-- -->
+
 Significant differences occur when the integrals are large. While many calculations give reasonable results, others are unacceptible. Plotting the difference (int_d) against various parameters estimates indicates the problem.   
 
-```{r Plots2}
+
+```r
 plot(x=df$int_d, y=df$pL)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-1.png)<!-- -->
+
+```r
 plot(x=df$int_d, y=df$Z/df$K)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-2.png)<!-- -->
+
+```r
 plot(x=df$int_d, y=df$K)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-3.png)<!-- -->
+
+```r
 plot(x=df$int_d, y=df$Z)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-4.png)<!-- -->
+
+```r
 plot(x=df$int_d, y=df$sg)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-5.png)<!-- -->
+
+```r
 plot(x=df$int_d, y=(df$Z*df$sg*df$K))
 ```
+
+![](BayesLCC_Development1_files/figure-html/Plots2-6.png)<!-- -->
 
 The outliers occur when size is close to the asymptote and Z/K is very small.  
 
@@ -225,7 +308,8 @@ $$
 
 Before proceeding, we provide an R function that can be integrated.  
 
-```{r Gamma1}
+
+```r
 gam1 <- function(a, alpha, L, Linf, K, Z, b0) {
   AmL <- alpha/(Linf*(1 - b0*exp(-K*a)))
   return((AmL^alpha)*(L^(alpha-1))*exp(-AmL*L-Z*a)/gamma(alpha))
@@ -238,6 +322,10 @@ Z <- 0.1
 b0 <- exp(-K*1.0)
 
 integrate(gam1, 0, Inf, alpha, L, Linf, K, Z, b0)
+```
+
+```
+## 0.1470326 with absolute error < 5.9e-06
 ```
 
 For this function, the appropriate Gauss quadrature polynomial is the generalized Laguerre-Gauss, which approximates functions containing $e^{-x} x^{-\alpha}; \ \ 0 \leq  x < \infty$ 
@@ -277,13 +365,18 @@ $$
 
 This function is the most likely to provide a good basis for estimation. A R function to check this produces the same result:    
 
-```{r Gamma3}
+
+```r
 gam3 <- function(p, alpha, L, Linf, K, Z, b0) {
   AmL <- alpha*(1+p)/Linf
   const <- alpha*L^(alpha-1) * b0^(-Z/K) / (K*Linf*gamma(alpha))
   return(const*(AmL^(alpha-1))*exp(-AmL*L)*(1/p)*((p/(1+p))^(Z/K)))
 }
 integrate(gam3, 0, Inf, alpha, L, Linf, K, Z, b0)
+```
+
+```
+## 0.1470338 with absolute error < 1.1e-05
 ```
 
 We further re-arrange the equation to extract all values that are not required in the integral, and further simplify the equation.  
@@ -302,13 +395,18 @@ $$
 
 Again, we check the function remains consistent:  
 
-```{r Gamma4}
+
+```r
 gam4 <- function(p, alpha, L, Linf, K, Z, b0) {
   AmL <- alpha*L/Linf
   const <- (AmL^alpha) * exp(-AmL) * b0^(-Z/K) / (K*L*gamma(alpha))
   return(const*((1+p)^(alpha-Z/K-1)) * (p^(Z/K-1)) * exp(-p*AmL))
 }
 integrate(gam4, 0, Inf, alpha, L, Linf, K, Z, b0)
+```
+
+```
+## 0.1470338 with absolute error < 1.1e-05
 ```
 
 A final simplification reduces the integral to a dimensionless values of length as a proportion of $L_\infty$ and $Z/K$.   
@@ -333,7 +431,8 @@ $$
 
 A check for the new function that it produces the same integral value:  
 
-```{r Gamma5}
+
+```r
 gam5 <- function(x, alpha, L, Linf, K, Z, b0) {
   c <- alpha*L/Linf
   m <- Z/K
@@ -343,9 +442,14 @@ gam5 <- function(x, alpha, L, Linf, K, Z, b0) {
 integrate(gam5, 0, Inf, alpha, L, Linf, K, Z, b0)
 ```
 
+```
+## 0.1470341 with absolute error < 3.1e-05
+```
+
 We now run a simulation test with widely varying parameters to see whether the standard integration routine and Laguerre-Gauss integration yield the same results. We firstly check how many nodes are required to minimise the error for the generalised Laguerre-Gauss function. The function itself is now adjusted so only the non-Laguerre-Gauss term is retained.  
 
-```{r GaussQuad5}
+
+```r
 V_nv <- seq(10, 100, by=5)
 err <- double()
 dev <- double()
@@ -383,12 +487,20 @@ for (nv in V_nv) {
   dev <- c(dev, sum(df$int_p^2))
 }
 plot(x=V_nv, y=dev)
+```
+
+![](BayesLCC_Development1_files/figure-html/GaussQuad5-1.png)<!-- -->
+
+```r
 plot(x=V_nv, y=err)
 ```
 
+![](BayesLCC_Development1_files/figure-html/GaussQuad5-2.png)<!-- -->
+
 The errors decrease with increasing numbers of nodes, with diminishing returns. The differences are minimised around 20 nodes and there appears little improvement above this level. Bearing in mind the adaptive Gauss-Kronrod algorithm used in "integrate" also has an associated error, this appears to provide a reasonable basis for integrating over age. However, in considering the full parameter range errors increase at extremes.    
 
-```{r Plots3}
+
+```r
 nv <- 60L
 df <- tibble(L=double(), Linf=double(), pL=double(), K=double(), Z=double(), 
              int_a = double(), int_b = double(), int_p=double(), dev=double())
@@ -411,12 +523,39 @@ for (i in 1:20000) {
 }
 
 plot(x=df$int_a, y=df$int_b)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-1.png)<!-- -->
+
+```r
 plot(x=df$int_p, y=df$pL)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-2.png)<!-- -->
+
+```r
 plot(x=df$int_p, y=df$K/df$Z)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-3.png)<!-- -->
+
+```r
 plot(x=df$int_p, y=df$Z/df$K)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-4.png)<!-- -->
+
+```r
 plot(x=df$int_p, y=df$K)
+```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-5.png)<!-- -->
+
+```r
 plot(x=df$int_p, y=df$Z)
 ```
+
+![](BayesLCC_Development1_files/figure-html/Plots3-6.png)<!-- -->
 
 Generally the largest errors occur at higher $Z/K$ values. This must be born in mind when setting the prior for $Z/K$ and in the analysis of very slow growing species. In addition, errors were only significant for sizes less than 30% of $L_\infty$. Generally for these, further improvements in accuracy may be necessary, for example including more nodes at smaller sizes. However, any inaccuracies can be checked after analysis.  
 
