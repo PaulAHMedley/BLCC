@@ -9,5 +9,5 @@ The model is fitted to a single length frequency sample with 6 parameters:
   - Z_K the total mortality in units of K, the growth rate  
   - Gs the growth model error parameter  
   - phi the over-dispersion parameter for the negative binomial  
- 
+The model is fitted using Stan (mc-stan.org). 
  
